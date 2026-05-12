@@ -176,11 +176,15 @@ fn getVoxelGap(x: i32, y: i32, z: i32) -> f32 {
     return f32((grid[idx] >> 8u) & 0xFFu) / 255.0;
 }
 
+fn sdRoundBox(p: vec3f, b: vec3f, r: f32) -> f32 {
+    let q = abs(p) - b + vec3f(r);
+    return length(max(q, vec3f(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0) - r;
+}
+
 // DDA traversal
 // Implementation of "A Fast Voxel Traversal Algorithm for Ray Tracing" 
 // by John Amanatides and Andrew Woo (1987).
 fn intersect_sub_voxel(ray: Ray, mapX: i32, mapY: i32, mapZ: i32, hit_rec: ptr<function, HitRecord>, mat_id: u32, shrink: f32) -> bool {
-    // Exact dynamic sub-voxel shrinkage boundary bounds
     let vMin = vec3f(f32(mapX), f32(mapY), f32(mapZ)) + shrink;
     let vMax = vec3f(f32(mapX), f32(mapY), f32(mapZ)) + 1.0 - shrink;
     
@@ -189,42 +193,65 @@ fn intersect_sub_voxel(ray: Ray, mapX: i32, mapY: i32, mapZ: i32, hit_rec: ptr<f
     if (intersectAABB(ray, vMin, vMax, &v_tNear, &v_tFar)) {
         if (v_tNear < 0.0 && v_tFar > 0.0) { v_tNear = 0.0; } // Extreme internal spawn failsafe
         
-        (*hit_rec).hit = true;
-        (*hit_rec).dist = v_tNear;
-        (*hit_rec).mat_id = mat_id;
-        
-        // Find exact mathematical normal of the sub-face physically struck
-        let hit_pos = ray.origin + ray.dir * v_tNear;
         let c = (vMin + vMax) * 0.5;
-        let p = hit_pos - c;
-        let d = abs(p) / ((vMax - vMin) * 0.5);
+        let b = (vMax - vMin) * 0.5;
+        // Scale corner radius so 1.0 = fully round sphere
+        let r = CORNER_RADIUS * min(min(b.x, b.y), b.z); 
         
-        var n = vec3f(0.0);
-        if (d.x > d.y && d.x > d.z) { n = vec3f(sign(p.x), 0.0, 0.0); }
-        else if (d.y > d.z) { n = vec3f(0.0, sign(p.y), 0.0); }
-        else { n = vec3f(0.0, 0.0, sign(p.z)); }
+        if (r <= 0.0) {
+            // Fast path for perfectly sharp cubes
+            (*hit_rec).hit = true;
+            (*hit_rec).dist = v_tNear;
+            (*hit_rec).mat_id = mat_id;
+            
+            let hit_pos = ray.origin + ray.dir * v_tNear;
+            let p = hit_pos - c;
+            let d = abs(p) / b;
+            
+            var n = vec3f(0.0);
+            if (d.x > d.y && d.x > d.z) { n = vec3f(sign(p.x), 0.0, 0.0); }
+            else if (d.y > d.z) { n = vec3f(0.0, sign(p.y), 0.0); }
+            else { n = vec3f(0.0, 0.0, sign(p.z)); }
+            
+            (*hit_rec).normal = n;
+            (*hit_rec).pos = hit_pos;
+            return true;
+        }
+
+        // --- True Geometric Rounded Corners via bounded SDF raymarch ---
+        var t = v_tNear;
+        var hit = false;
+        var p = vec3f(0.0);
         
-        // --- Optical Normal Bending (Fakes rounded geometric curvature) ---
-        let flat_thresh = 1.0 - CORNER_RADIUS;
-        let bend = max(vec3f(0.0), d - flat_thresh) / CORNER_RADIUS;
-        
-        let primary_axis = abs(n);
-        let edge_axes = 1.0 - primary_axis;
-        let u_len = length(bend * edge_axes);
-        
-        if (u_len > 0.0) {
-            let u_clamped = min(1.0, u_len);
-            let h = sqrt(1.0 - u_clamped * u_clamped);
-            // Reconstruct the normal using the mathematical curve formula for cylinders/spheres
-            let nx = select(bend.x * sign(p.x), h * sign(p.x), primary_axis.x > 0.5);
-            let ny = select(bend.y * sign(p.y), h * sign(p.y), primary_axis.y > 0.5);
-            let nz = select(bend.z * sign(p.z), h * sign(p.z), primary_axis.z > 0.5);
-            n = normalize(vec3f(nx, ny, nz));
+        for (var step = 0; step < 8; step++) {
+            p = ray.origin + ray.dir * t - c;
+            let d = sdRoundBox(p, b, r);
+            if (d < 0.0001) {
+                hit = true;
+                break;
+            }
+            t += d;
+            if (t > v_tFar + 0.001) { break; }
         }
         
-        (*hit_rec).normal = n;
-        (*hit_rec).pos = hit_pos;
-        return true;
+        if (hit) {
+            (*hit_rec).hit = true;
+            (*hit_rec).dist = t;
+            (*hit_rec).mat_id = mat_id;
+            (*hit_rec).pos = ray.origin + ray.dir * t;
+            
+            // True geometric normal via SDF gradient
+            let e = vec2f(0.001, 0.0);
+            (*hit_rec).normal = normalize(vec3f(
+                sdRoundBox(p + e.xyy, b, r) - sdRoundBox(p - e.xyy, b, r),
+                sdRoundBox(p + e.yxy, b, r) - sdRoundBox(p - e.yxy, b, r),
+                sdRoundBox(p + e.yyx, b, r) - sdRoundBox(p - e.yyx, b, r)
+            ));
+            return true;
+        }
+        
+        // Ray slipped through the empty rounded corner space!
+        return false;
     }
     return false;
 }
