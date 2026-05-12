@@ -20,7 +20,7 @@ const UBO = Object.freeze({
     sunDirX: 20, sunDirY: 21, sunDirZ: 22, gridDimZ: 23,
     sunR: 24,    sunG: 25,    sunB: 26,    sunSize: 27,
     ambientIntensity: 28, sunIntensity: 29, maxHops: 30, batchSize: 31,
-    focusDistance: 32,    aperture: 33,
+    focusDistance: 32,    aperture: 33,   volumetricDensity: 34,
 });
 
 export class Cubica {
@@ -47,7 +47,8 @@ export class Cubica {
             cornerRadius: 0.0,
             batchSize: 4,
             focusDistance: 100,
-            aperture: 0.0
+            aperture: 0.0,
+            volumetricDensity: 0.0
         };
         
         // Add a default "air" material at index 0
@@ -369,6 +370,7 @@ export class Cubica {
 
         this.uniformDataFloat[UBO.focusDistance] = this.env.focusDistance;
         this.uniformDataFloat[UBO.aperture]      = this.env.aperture;
+        this.uniformDataFloat[UBO.volumetricDensity] = this.env.volumetricDensity;
 
         // Iterate Sample Counters locally
         this.sampleCount += currentBatch;

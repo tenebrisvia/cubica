@@ -306,6 +306,7 @@ Passed to `init({ env })` or `setEnvironment()`.
 | `batchSize` | `number` | `4` | Default samples per pixel per `trace()` call |
 | `focusDistance` | `number` | `100` | World-space distance from the camera to the perfectly sharp focal plane. Objects closer or further will be blurred. Has no effect when `aperture` is `0` |
 | `aperture` | `number` | `0.0` | Radius of the virtual lens disc. `0` = pinhole camera (no blur, default). `0.5–3.0` gives a shallow depth-of-field bokeh effect. Larger values blur more aggressively |
+| `volumetricDensity` | `number` | `0.0` | Enables "God Rays" (volumetric single scattering) when > 0. Controls the density/intensity of the fog. `0.0` disables the effect entirely with zero performance cost. `0.02 - 0.1` gives a subtle realistic haze. |
 
 ---
 
