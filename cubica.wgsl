@@ -31,7 +31,11 @@ struct Uniforms {
     focusDistance: f32,  // world-space distance to the in-focus plane
     aperture: f32,       // radius of the lens disc; 0 = pinhole (no blur)
     volumetricDensity: f32,
-    _pad3: f32,
+    tileOffsetX: u32,
+    tileOffsetY: u32,
+    tileWidth: u32,
+    tileHeight: u32,
+    _pad4: u32,
 }
 
 @group(0) @binding(0) var<storage, read> grid: array<u32>;
@@ -408,6 +412,21 @@ fn main_pt(@builtin(global_invocation_id) id: vec3u) {
         return;
     }
     
+    let pixelCoord = vec2i(id.xy);
+    let in_tile = (id.x >= uniforms.tileOffsetX && id.x < uniforms.tileOffsetX + uniforms.tileWidth &&
+                   id.y >= uniforms.tileOffsetY && id.y < uniforms.tileOffsetY + uniforms.tileHeight);
+                   
+    var old_color = textureLoad(accumMapOld, pixelCoord, 0); 
+    
+    if (!in_tile) {
+        textureStore(accumMapNew, pixelCoord, old_color);
+        return;
+    }
+
+    if (uniforms.sampleCount <= uniforms.batchSize) { 
+        old_color = vec4f(0.0); 
+    }
+    
     let pixelPos = vec2f(f32(id.x), f32(id.y));
     let resolution = vec2f(f32(dims.x), f32(dims.y));
     
@@ -471,7 +490,7 @@ fn main_pt(@builtin(global_invocation_id) id: vec3u) {
         for (var b = 0u; b < MAX_BOUNCES; b++) {
             var hit_rec: HitRecord;
             traverse(ray, &hit_rec);
-
+            
             // --- Monte Carlo Single Scattering (God Rays) ---
             if (b == 0u && uniforms.volumetricDensity > 0.0 && uniforms.sunIntensity > 0.0) {
                 let boxMin = vec3f(0.0);
@@ -630,14 +649,6 @@ fn main_pt(@builtin(global_invocation_id) id: vec3u) {
     }
     
     let avg_batch_color = batch_color / f32(uniforms.batchSize);
-    
-    // Accumulate
-    let pixelCoord = vec2i(id.xy);
-    var old_color = textureLoad(accumMapOld, pixelCoord, 0); // Need mip level 0 for non-storage texture reading
-    
-    if (uniforms.sampleCount <= uniforms.batchSize) {
-        old_color = vec4f(0.0);
-    }
     
     let mix_factor = f32(uniforms.batchSize) / f32(uniforms.sampleCount);
     let final_color = mix(old_color.rgb, avg_batch_color, mix_factor);
