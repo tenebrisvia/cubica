@@ -21,6 +21,7 @@ Because every pixel is computed in parallel on the GPU and the algorithm is phys
 - Correct glass refraction and metallic reflection
 - Emissive voxels that act as light sources
 - Progressive refinement — it keeps getting better the longer you let it run
+- Tiled rendering support for exporting massive high-resolution images without GPU timeouts
 
 ---
 
@@ -247,13 +248,14 @@ See [Environment options](#environment-options) for all fields.
 
 ---
 
-#### `cubica.trace(batchSize?)`
+#### `cubica.trace(batchSize?, tile?)`
 
 Runs one render step: dispatches the compute shader for `batchSize` samples per pixel, then blits the accumulated result to the canvas.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `batchSize` | `number` | `env.batchSize` | Samples per pixel per call. Higher = faster convergence but longer GPU frame time. `1` during interaction, `4–8` at rest is a common pattern |
+| `tile` | `object` | `null` | Optional tile constraint `{x, y, w, h}` used for high-resolution tiled rendering. Bypasses GPU timeout restrictions on massive resolutions by rendering the image in chunks. |
 
 Call this every animation frame.
 
@@ -263,6 +265,18 @@ function frame() {
     requestAnimationFrame(frame);
 }
 ```
+
+---
+
+#### `cubica.resize(width, height)`
+
+Resizes the internal accumulation textures and updates the internal canvas dimensions (multiplied by the current render scale). Automatically resets the accumulation buffer.
+
+---
+
+#### `cubica.setRenderScale(scale)`
+
+Dynamically adjusts the internal rendering resolution relative to the canvas size (e.g. `0.3` for 30% resolution). Useful for maintaining framerates during camera movement without modifying the physical canvas size. Automatically triggers a resize and clears accumulation if the scale changes.
 
 ---
 
@@ -405,7 +419,7 @@ Internally each grid cell is a 32-bit unsigned integer:
 The path tracer runs as a WebGPU **compute shader** dispatched at 8×8 workgroup size. Each invocation handles one pixel.
 
 **Per frame:**
-1. `trace()` writes updated camera/environment uniforms to a 144-byte uniform buffer.
+1. `trace()` writes updated camera/environment uniforms to a 160-byte uniform buffer.
 2. The compute pass runs `batchSize` full paths per pixel. Each path bounces up to `maxBounces` times.
 3. The resulting colour is blended into the previous accumulation texture (ping-pong between two `rgba16float` textures).
 4. A fullscreen render pass reads the latest accumulation texture, applies ACES filmic tone mapping and γ 2.2 correction, and writes to the canvas swap chain.

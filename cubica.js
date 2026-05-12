@@ -9,7 +9,8 @@
 //   sunDirection:vec3f, gridDimZ:u32,         // slots 20-23
 //   sunColor:vec3f, sunSize:f32,              // slots 24-27
 //   ambientIntensity:f32, sunIntensity:f32, maxHops:u32, batchSize:u32 // slots 28-31
-//   focusDistance:f32, aperture:f32, _pad2:f32, _pad3:f32  // slots 32-35
+//   focusDistance:f32, aperture:f32, volumetricDensity:f32 // slots 32-34
+//   tileOffsetX:u32, tileOffsetY:u32, tileWidth:u32, tileHeight:u32, _pad4:u32 // slots 35-39
 // }
 const UBO = Object.freeze({
     camPosX: 0,  camPosY: 1,  camPosZ: 2,  fov: 3,
@@ -21,6 +22,7 @@ const UBO = Object.freeze({
     sunR: 24,    sunG: 25,    sunB: 26,    sunSize: 27,
     ambientIntensity: 28, sunIntensity: 29, maxHops: 30, batchSize: 31,
     focusDistance: 32,    aperture: 33,   volumetricDensity: 34,
+    tileOffsetX: 35, tileOffsetY: 36, tileWidth: 37, tileHeight: 38
 });
 
 export class Cubica {
@@ -28,6 +30,7 @@ export class Cubica {
         this.materials = [];
         this.currentMaterial = 0; // 0 will be empty space / air
         this.sampleCount = 0;
+        this.renderScale = 1.0;
         
         // Default camera
         this.camPos = [0, 0, 0];
@@ -104,12 +107,12 @@ export class Cubica {
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
 
-        // Uniforms — 36 floats = 144 bytes (32 base + 4 for DOF)
-        this.uniformBufferArray = new ArrayBuffer(144);
+        // Uniforms — 40 floats = 160 bytes (32 base + 3 for DOF + 4 for tiling + 1 pad)
+        this.uniformBufferArray = new ArrayBuffer(160);
         this.uniformDataFloat = new Float32Array(this.uniformBufferArray);
         this.uniformDataUint = new Uint32Array(this.uniformBufferArray);
         this.uniformBuffer = this.device.createBuffer({
-            size: 144,
+            size: 160,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
@@ -341,10 +344,38 @@ export class Cubica {
 
     clear() {
         this.sampleCount = 0;
-        this.frameIndex = 0; // Reset ping-pong index
+        // Ensure we don't reset frameIndex here, otherwise the ping-pong buffer reads from the wrong history!
     }
 
-    trace(batchSizeOverride) {
+    setRenderScale(scale) {
+        if (this.renderScale === scale) return;
+        this.renderScale = scale;
+        this.resize(this.canvas.clientWidth, this.canvas.clientHeight);
+    }
+
+    resize(width, height) {
+        this.canvas.width = width * (this.renderScale || 1.0);
+        this.canvas.height = height * (this.renderScale || 1.0);
+        this.createAccumulationTexture();
+        this.updateBindGroups();
+        this.clear();
+    }
+
+    trace(batchSizeOverride, tile = null) {
+        if (!this.computePipeline || !this.renderPipeline) return; // Pipeline compiling
+        
+        if (tile) {
+            this.uniformDataUint[UBO.tileOffsetX] = tile.x;
+            this.uniformDataUint[UBO.tileOffsetY] = tile.y;
+            this.uniformDataUint[UBO.tileWidth] = tile.w;
+            this.uniformDataUint[UBO.tileHeight] = tile.h;
+        } else {
+            this.uniformDataUint[UBO.tileOffsetX] = 0;
+            this.uniformDataUint[UBO.tileOffsetY] = 0;
+            this.uniformDataUint[UBO.tileWidth] = 99999;
+            this.uniformDataUint[UBO.tileHeight] = 99999;
+        }
+
         const currentBatch = batchSizeOverride !== undefined ? batchSizeOverride : this.env.batchSize;
         
         // Write env uniforms once per trace() call
@@ -388,7 +419,7 @@ export class Cubica {
         computePass.setBindGroup(0, cbg);
         computePass.dispatchWorkgroups(this._wgX, this._wgY);
         computePass.end();
-        this.frameIndex++;
+        this.frameIndex = (this.frameIndex + 1) % 2; // Prevent overflow and safely toggle
 
         // Single Render Pass at the end — blit accumulation texture to canvas
         const renderPass = commandEncoder.beginRenderPass({
@@ -400,8 +431,7 @@ export class Cubica {
             }]
         });
         renderPass.setPipeline(this.renderPipeline);
-        // frameIndex has been incremented, so the last written texture is (frameIndex-1) % 2
-        const rbg = ((this.frameIndex - 1) % 2 === 0) ? this.renderBindGroup0 : this.renderBindGroup1;
+        const rbg = (this.frameIndex === 1) ? this.renderBindGroup0 : this.renderBindGroup1;
         renderPass.setBindGroup(0, rbg);
         renderPass.draw(6, 1, 0, 0);
         renderPass.end();
