@@ -30,7 +30,7 @@ struct Uniforms {
     // aperture == 0 reduces to a standard pinhole camera with no extra cost.
     focusDistance: f32,  // world-space distance to the in-focus plane
     aperture: f32,       // radius of the lens disc; 0 = pinhole (no blur)
-    _pad2: f32,
+    volumetricDensity: f32,
     _pad3: f32,
 }
 
@@ -444,6 +444,41 @@ fn main_pt(@builtin(global_invocation_id) id: vec3u) {
         for (var b = 0u; b < MAX_BOUNCES; b++) {
             var hit_rec: HitRecord;
             traverse(ray, &hit_rec);
+
+            // --- Monte Carlo Single Scattering (God Rays) ---
+            if (b == 0u && uniforms.volumetricDensity > 0.0 && uniforms.sunIntensity > 0.0) {
+                let boxMin = vec3f(0.0);
+                let boxMax = vec3f(f32(uniforms.gridDimX), f32(uniforms.gridDimY), f32(uniforms.gridDimZ));
+                var tmin_b: f32;
+                var tmax_b: f32;
+                if (intersectAABB(ray, boxMin, boxMax, &tmin_b, &tmax_b)) {
+                    let ray_entry = max(0.0, tmin_b);
+                    let ray_exit = select(tmax_b, hit_rec.dist, hit_rec.hit);
+                    let travel_dist = ray_exit - ray_entry;
+                    
+                    if (travel_dist > 0.0) {
+                        let t_scatter = ray_entry + rand() * travel_dist;
+                        let scatter_pos = ray.origin + ray.dir * t_scatter;
+                        
+                        // Shadow ray
+                        let sun_jitter = rand_dir() * (1.0 - uniforms.sunSize) * 2.0;
+                        let shadow_dir = normalize(uniforms.sunDirection + sun_jitter);
+                        var shadow_ray = Ray(scatter_pos, shadow_dir, 1.0 / shadow_dir);
+                        var shadow_hit: HitRecord;
+                        traverse(shadow_ray, &shadow_hit);
+                        
+                        if (!shadow_hit.hit) {
+                            let cos_theta = dot(ray.dir, shadow_dir);
+                            let g = 0.6; // Forward scattering
+                            let g2 = 0.36;
+                            let phase = (1.0 - g2) / (4.0 * PI * pow(1.0 + g2 - 2.0 * g * cos_theta, 1.5));
+                            
+                            let scatter_color = uniforms.sunColor * uniforms.sunIntensity * uniforms.volumetricDensity * phase * travel_dist;
+                            color += throughput * scatter_color;
+                        }
+                    }
+                }
+            }
             
             if (!hit_rec.hit) {
                 // Miss - hit sky
