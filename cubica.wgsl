@@ -521,7 +521,7 @@ fn main_pt(@builtin(global_invocation_id) id: vec3u) {
                 last_bounce_was_specular = isSpecular;
 
                 // Next Event Estimation (Shadow Ray) — skip entirely when sun is off
-                if (!isSpecular && uniforms.sunIntensity > 0.0) {
+                if (uniforms.sunIntensity > 0.0) {
                     let sun_jitter = rand_dir() * (1.0 - uniforms.sunSize) * 2.0;
                     let shadow_dir = normalize(uniforms.sunDirection + sun_jitter);
                     let NdotL = max(dot(hit_rec.normal, shadow_dir), 0.0);
@@ -531,7 +531,7 @@ fn main_pt(@builtin(global_invocation_id) id: vec3u) {
                         var shadow_hit: HitRecord;
                         traverse(shadow_ray, &shadow_hit);
                         if (!shadow_hit.hit) {
-                            // Physically Accurate Explicit Lighting (Lambertian BRDF)
+                            // Direct lighting (diffuse or specular)
                             color += throughput * mat.color * uniforms.sunColor * uniforms.sunIntensity * NdotL * INV_PI;
                         }
                     }
